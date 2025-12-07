@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Temporary files
+*.log
+*.bak
+
+# Streamlit cache
+.streamlit/cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local config
+secrets.toml
+local_config.py
+
+# Documents
+/docs
