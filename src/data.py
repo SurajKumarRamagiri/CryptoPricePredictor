@@ -18,7 +18,8 @@ class DataFetcher:
     BINANCE_INTERVALS = {
         "1h": "1h",
         "4h": "4h", 
-        "24h": "1d"
+        "24h": "1d",
+        "1d": "1d"
     }
     
     @staticmethod
@@ -96,9 +97,9 @@ class DataFetcher:
             # Actually, existing code uses yf_interval for fetching.
             
             req_interval = "1h"
-            if interval == "24h":
+            if interval == "24h" or interval == "1d":
                 req_interval = "1d"
-            elif interval == "1h":
+            elif interval == "1h" or interval == "60m":
                 req_interval = "1h"
             elif interval == "4h":
                 # Fallback to 1h for 4h request is common if API lacks it, but model expects 4h steps?

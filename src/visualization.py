@@ -12,6 +12,55 @@ class Visualizer:
     """Handles chart generation and display."""
     
     @staticmethod
+    def plot_historical_data(df, pair, horizon, lookback=48):
+        """Generate interactive Plotly chart with recent historical data only."""
+        
+        # Handle timezone for DF
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('UTC')
+        df.index = df.index.tz_convert('Asia/Kolkata')
+        
+        fig = go.Figure()
+        
+        recent_df = df.tail(lookback)
+        
+        fig.add_trace(go.Scatter(
+            x=recent_df.index,
+            y=recent_df['close'],
+            name='Close',
+            mode='lines',
+            line=dict(color='#1f77b4', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(31, 119, 180, 0.1)'
+        ))
+        
+        fig.update_layout(
+            title=f"{pair} — Recent Market Data ({horizon})",
+            xaxis_title='Time',
+            yaxis_title='Price (USD)',
+            hovermode='x unified',
+            height=500,
+            xaxis=dict(
+                tickformat='%I:%M %p<br>%d %b',
+                ticklabelmode='period'
+            ),
+            yaxis=dict(
+                autorange=True,
+                fixedrange=False
+            ),
+            margin=dict(l=20, r=20, t=60, b=20),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='right',
+                x=1
+            )
+        )
+        
+        return fig
+
+    @staticmethod
     def plot_predictions(df, pred_series, resid_std, pair, horizon, lookback=60,
                         pred_series2=None, resid_std2=None, label1='LSTM', label2='GRU'):
         """Generate interactive Plotly chart with recent historical data."""
