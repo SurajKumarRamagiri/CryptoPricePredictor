@@ -6,6 +6,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import yfinance as yf
 from datetime import datetime, timedelta
 
 
@@ -22,26 +23,128 @@ class DataFetcher:
     
     @staticmethod
     @st.cache_data(ttl=300)
-    def fetch_history(pair, period, interval):
-        """Fetch OHLCV data from Binance API and add time features."""
+    def fetch_history(pair, period, interval, source="Binance"):
+        """Fetch OHLCV data from API with fallback support."""
+        
+        # Determine order of sources to try
+        sources_to_try = [source]
+        if source == "Binance":
+            sources_to_try.append("Yahoo Finance")
+        else:
+            sources_to_try.append("Binance")
+            
+        df = None
+        used_source = None
+        errors = []
+
+        for src in sources_to_try:
+            try:
+                if src == "Yahoo Finance":
+                    yf_symbol = DataFetcher._convert_pair_to_yfinance(pair)
+                    df = DataFetcher._fetch_from_yfinance(yf_symbol, interval, period)
+                else:
+                    binance_symbol = DataFetcher._convert_pair_to_binance(pair)
+                    binance_interval = DataFetcher.BINANCE_INTERVALS.get(interval, "1h")
+                    num_klines = DataFetcher._calculate_num_klines(period, interval)
+                    df = DataFetcher._fetch_from_binance(binance_symbol, binance_interval, num_klines)
+                
+                if df is not None and not df.empty:
+                    used_source = src
+                    break
+            except Exception as e:
+                errors.append(f"{src}: {str(e)}")
+                continue
+
+        if df is None or df.empty:
+            st.error(f"Failed to fetch data for {pair}. Errors: {'; '.join(errors)}")
+            return None
+        
+        if used_source != source:
+            st.warning(f"⚠️ Primary source ({source}) unavailable. Using data from {used_source} instead.")
+        
         try:
-            binance_symbol = DataFetcher._convert_pair_to_binance(pair)
-            binance_interval = DataFetcher.BINANCE_INTERVALS.get(interval, "1h")
-            num_klines = DataFetcher._calculate_num_klines(period, interval)
-            
-            df = DataFetcher._fetch_from_binance(binance_symbol, binance_interval, num_klines)
-            
-            if df is None or df.empty:
-                st.error(f"Failed to fetch data from Binance for {binance_symbol}")
-                return None
-            
             df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
             df = DataFetcher._add_time_features(df)
+            return df
+        except Exception as e:
+             st.error(f"Error processing data from {used_source}: {e}")
+             return None
+
+    @staticmethod
+    def _convert_pair_to_yfinance(pair):
+        """Convert pair format to Yahoo Finance ticker (e.g. BTC-USD)."""
+        # Yahoo Finance usually uses 'BTC-USD', 'ETH-USD', etc.
+        return pair
+
+    @staticmethod
+    def _fetch_from_yfinance(symbol, interval, period):
+        """Fetch OHLCV data from Yahoo Finance."""
+        try:
+            # Map interval to yfinance allowed intervals
+            # valid: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo
+            yf_interval_map = {
+                "1h": "1h",
+                "4h": "1h", # yfinance doesn't support 4h, fallback to 1h is risky for model, but we can resample or just require 1h
+                            # NOTE: For now, if 4h is requested, yfinance might not support it directly.
+                            # Standard yfinance intervals: 1m,2m,5m,15m,30m,60m,90m,1h,1d,5d,1wk,1mo,3mo
+            }
             
+            # Special handling for intervals not supported by YF directly (like 4h)
+            # We will default to '1h' and user might notice granularity diff, or we implement resampling.
+            # For simplicity in this edit, we map 24h -> 1d, 1h -> 1h. 
+            # 4h is tricky. Let's use 1h and maybe later resample? 
+            # Actually, existing code uses yf_interval for fetching.
+            
+            req_interval = "1h"
+            if interval == "24h":
+                req_interval = "1d"
+            elif interval == "1h":
+                req_interval = "1h"
+            elif interval == "4h":
+                # Fallback to 1h for 4h request is common if API lacks it, but model expects 4h steps?
+                # The model *training* data defines what a "step" is. 
+                # If we feed 1h data to a 4h model, it's bad.
+                # However, yfinance doesn't return 4h candles. 
+                # We will use 1h and warn used, or just return 1h and let the user beware.
+                # Better: Let's stick to 1h for now or try to resample if possible.
+                # Given complexity, we'll request 1h.
+                req_interval = "1h" 
+                
+            # Period mapping
+            # yfinance periods: 1d,5d,1mo,3mo,6mo,1y,2y,5y,10y,ytd,max
+            # Our period input is like "730d".
+            yf_period = "2y" # Default 730 days
+            
+            df = yf.download(symbol, period=yf_period, interval=req_interval, progress=False)
+            
+            if df is None or df.empty:
+                return None
+            
+            # yfinance returns MultiIndex columns in new versions? 
+            # Ensure flat columns
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            
+            # yfinance columns: Open, High, Low, Close, Adj Close, Volume
+            # Rename if necessary to match required format (Open, High, Low, Close, Volume)
+            # They are usually Title Case already.
+            
+            # Resample for 4h if needed? 
+            if interval == "4h":
+                # Simple resampling
+                agg_dict = {
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum'
+                }
+                df = df.resample('4h').agg(agg_dict).dropna()
+
             return df
         
         except Exception as e:
-            st.error(f"Binance data fetch failed: {e}")
+            st.error(f"Yahoo Finance fetch failed: {e}")
             return None
     
     @staticmethod

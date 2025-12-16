@@ -86,11 +86,11 @@ class TimelineBuilder:
             return pd.Timedelta(days=1)
     
     @staticmethod
-    def compute_prediction_steps(horizon: str, days: int) -> int:
-        """Convert user-selected days + horizon into forecast steps."""
-        horizon_map_hours = {"1h": 1, "4h": 4, "24h": 24, "1h ": 1}
+    def compute_prediction_steps(horizon: str, total_hours: int) -> int:
+        """Convert user-selected hours + horizon into forecast steps."""
+        horizon_map_hours = {"1h": 1, "4h": 4, "24h": 24}
         hours_per_step = horizon_map_hours.get(horizon, 1)
-        total_hours = days * 24
+        # total_hours passed directly
         steps = max(1, int(total_hours / hours_per_step))
         return steps
 
@@ -166,7 +166,7 @@ class DataLoader:
         return model, scaler, model_load_time, scaler_load_time, cfg
     
     @staticmethod
-    def fetch_and_prepare_data(pair, horizon, model, scaler):
+    def fetch_and_prepare_data(pair, horizon, model, scaler, source="Binance"):
         """Fetch historical data and prepare features."""
         from src.data import DataFetcher
         
@@ -186,7 +186,7 @@ class DataLoader:
         )
         
         period_str = DataFetcher.compute_period_string(needed_points, yf_interval)
-        df = DataFetcher.fetch_history(pair, period=period_str, interval=yf_interval)
+        df = DataFetcher.fetch_history(pair, period=period_str, interval=yf_interval, source=source)
         
         if df is None or df.empty:
             st.error("Failed to fetch historical data.")

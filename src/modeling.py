@@ -49,7 +49,7 @@ class PredictionEngine:
     """Orchestrates prediction pipeline."""
     
     @staticmethod
-    def run_prediction(df, model, scaler, lookback, n_features):
+    def run_prediction(df, model, scaler, lookback, n_features, steps=1):
         """Execute prediction pipeline."""
         feature_columns = FeatureProcessor.FEATURE_COLUMNS
         
@@ -74,15 +74,20 @@ class PredictionEngine:
         cur_seq = last_seq.reshape(1, lookback, scaled.shape[1])
         
         t0 = time.time()
-        preds_scaled = Predictor.predict_single_step(model, cur_seq)
-        predict_time = time.time() - t0
-        
-        if preds_scaled.ndim == 3:
-            preds_scaled = preds_scaled.reshape(preds_scaled.shape[1], preds_scaled.shape[2])
-        elif preds_scaled.ndim == 2:
-            preds_scaled = preds_scaled.reshape(preds_scaled.shape[1], 1)
+        if steps > 1:
+            preds_scaled = Predictor.predict_iterative(model, cur_seq, steps, n_features)
+            # predict_iterative returns (steps, n_features), ensure 2D
         else:
-            preds_scaled = np.array([[preds_scaled.ravel()[0]]])
+            preds_scaled = Predictor.predict_single_step(model, cur_seq)
+            
+            if preds_scaled.ndim == 3:
+                preds_scaled = preds_scaled.reshape(preds_scaled.shape[1], preds_scaled.shape[2])
+            elif preds_scaled.ndim == 2:
+                preds_scaled = preds_scaled.reshape(preds_scaled.shape[1], 1)
+            else:
+                preds_scaled = np.array([[preds_scaled.ravel()[0]]])
+                
+        predict_time = time.time() - t0
         
         preds = FeatureProcessor.denormalize_predictions(preds_scaled, scaler)
         resid_std = Predictor.estimate_residual_std(model, scaler, values, lookback)
@@ -97,10 +102,10 @@ class PredictionEngine:
         }
 
     @staticmethod
-    def compare_models(df, lstm_model, gru_model, scaler, lookback, n_features, parallel=True):
+    def compare_models(df, lstm_model, gru_model, scaler, lookback, n_features, steps=1, parallel=True):
         """Run predictions for LSTM and GRU and return structured results."""
         def call(model):
-            return PredictionEngine.run_prediction(df, model, scaler, lookback, n_features)
+            return PredictionEngine.run_prediction(df, model, scaler, lookback, n_features, steps=steps)
 
         results = {}
         if parallel:
@@ -150,12 +155,38 @@ class PredictorHelper:
             else:
                 next_scaled = out.reshape(1, 1)
             
+            # Store prediction
             preds_list.append(next_scaled.ravel())
             
-            next_scaled_reshaped = next_scaled.reshape(1, 1, n_features)
+            # Prepare input for next step
+            if next_scaled.size < n_features:
+                # Model predicts target only (e.g., Close), but needs full features for input
+                # Impute other features from previous step
+                last_feats = cur[:, -1, :].reshape(1, n_features)
+                next_feats = last_feats.copy()
+                
+                # Update price columns if we have standard OHLCV structure
+                if n_features >= 4:
+                    # Index 3 is Close. Use it as new Close.
+                    val = next_scaled.ravel()[0]
+                    next_feats[0, 3] = val
+                    
+                    # Heuristics for other price columns
+                    next_feats[0, 0] = last_feats[0, 3]  # Open = Prev Close
+                    next_feats[0, 1] = val               # High = Close (flat candle)
+                    next_feats[0, 2] = val               # Low = Close (flat candle)
+                    # Volume (4) and Time features (5,6,7) copied from last step
+                else:
+                    # Fallback for non-standard feature sets
+                    next_feats.fill(next_scaled.ravel()[0])
+                
+                next_scaled_reshaped = next_feats.reshape(1, 1, n_features)
+            else:
+                next_scaled_reshaped = next_scaled.reshape(1, 1, n_features)
+            
             cur = np.concatenate([cur[:, 1:, :], next_scaled_reshaped], axis=1)
         
-        return np.array(preds_list).reshape(-1, n_features)
+        return np.array(preds_list).reshape(len(preds_list), -1)
 
 
 # Add predict_single_step to Predictor for backward compatibility

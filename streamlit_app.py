@@ -39,7 +39,7 @@ class InputHandler:
                     color: #00FFFF;
                     letter-spacing: 1px;
                 ">
-                    CryptoSense AI
+                CryptoSense AI
                 </h1>
                 <p style="
                     font-size: 13px; 
@@ -73,6 +73,8 @@ class InputHandler:
         background-color: {secondary_bg};
         padding: 16px 12px 24px 12px;
         border-right: 1px solid rgba(0,0,0,0.04);
+        min-width: 400px;
+        max-width: 400px;
         }}
         .sidebar-title {{ font-size:20px; font-weight:700; color:{accent}; margin-bottom:6px; }}
         .sidebar-caption {{ font-size:12px; color:rgba(0,0,0,0.45); margin-top:-8px; margin-bottom:12px; }}
@@ -93,6 +95,13 @@ class InputHandler:
         st.sidebar.markdown(css_sidebar, unsafe_allow_html=True)
 
         st.sidebar.markdown("### ⚙️ Trading Configuration")
+        
+        data_source = st.sidebar.radio(
+            "Data Source",
+            ("Binance", "Yahoo Finance"),
+            index=0,
+            horizontal=True
+        )
 
         col = st.sidebar.columns([220, 1])[0]
 
@@ -115,11 +124,28 @@ class InputHandler:
         horizon = horizon_map.get(horizon_label, "1h")
 
         st.sidebar.markdown("### 🧠 Model Selection")
-        model_choice = st.sidebar.selectbox(
-            "Pick model architecture (or Auto for best available)",
-            ("Auto", "LSTM", "GRU"),
-            index=0
-        )
+        col_model = st.sidebar.columns([220, 1])[0]
+        with col_model:
+            model_choice = st.selectbox(
+                "Pick model architecture (or Auto for best available)",
+                ("Auto", "LSTM", "GRU"),
+                index=0
+            )
+        st.sidebar.markdown("### 📅 Prediction Period")
+        col_pred = st.sidebar.columns([220, 1])[0]
+        with col_pred:
+            prediction_period_label = st.selectbox(
+                "Predict ahead for",
+                ("12 Hours", "1 Day", "7 Days"),
+                index=0,
+                key="prediction_period_select"
+            )
+        
+        val = int(prediction_period_label.split()[0])
+        if "Hour" in prediction_period_label:
+            prediction_period_hours = val
+        else:
+            prediction_period_hours = val * 24
 
         col1, col2 = st.sidebar.columns([1, 1])
 
@@ -157,13 +183,20 @@ class InputHandler:
         st.sidebar.markdown("**⏱ Timezone:** IST ")
         st.sidebar.caption("Built with Streamlit • Model: LSTM / GRU")
 
+        if st.sidebar.button("🗑️ Clear Cache"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.sidebar.success("Cache Cleared!")
+
         return {
             "pair": pair,
             "horizon": horizon,
             "theme_mode": theme_mode,
             "model_choice": model_choice,
+            "prediction_period_hours": prediction_period_hours,
             "run": run,
-            "compare": compare
+            "compare": compare,
+            "source": data_source
         }
 
     
@@ -244,13 +277,15 @@ def main():
                 user_input['pair'],
                 user_input['horizon'],
                 model,
-                scaler
+                scaler,
+                source=user_input['source']
             )
 
             if df is None:
                 return
 
-            result = PredictionEngine.run_prediction(df, model, scaler, lookback, n_features)
+            steps = TimelineBuilder.compute_prediction_steps(user_input['horizon'], user_input['prediction_period_hours'])
+            result = PredictionEngine.run_prediction(df, model, scaler, lookback, n_features, steps=steps)
 
             if result is None:
                 return
@@ -344,13 +379,14 @@ def main():
 
         example_model = lstm_model
         df, lookback, n_features, yf_interval = DataLoader.fetch_and_prepare_data(
-            user_input['pair'], user_input['horizon'], example_model, scaler
+            user_input['pair'], user_input['horizon'], example_model, scaler, source=user_input['source']
         )
         if df is None:
             return
 
         with st.spinner("Running LSTM and GRU predictions..."):
-            results = PredictionEngine.compare_models(df, lstm_model, gru_model, scaler, lookback, n_features, parallel=True)
+            steps = TimelineBuilder.compute_prediction_steps(user_input['horizon'], user_input['prediction_period_hours'])
+            results = PredictionEngine.compare_models(df, lstm_model, gru_model, scaler, lookback, n_features, steps=steps, parallel=True)
 
             if not results.get('lstm') or not results.get('gru'):
                 st.error("Comparison failed; one or both models returned no result.")

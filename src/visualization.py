@@ -16,10 +16,24 @@ class Visualizer:
                         pred_series2=None, resid_std2=None, label1='LSTM', label2='GRU'):
         """Generate interactive Plotly chart with recent historical data."""
 
-        df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
-        pred_series.index = pd.DatetimeIndex(pred_series.index).tz_localize('UTC').tz_convert('Asia/Kolkata')
+        # Handle timezone for DF
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('UTC')
+        df.index = df.index.tz_convert('Asia/Kolkata')
+
+        # Handle timezone for prediction series
+        if pred_series.index.tz is None:
+            pred_series.index = pd.DatetimeIndex(pred_series.index).tz_localize('UTC')
+        else:
+            pred_series.index = pd.DatetimeIndex(pred_series.index)
+        pred_series.index = pred_series.index.tz_convert('Asia/Kolkata')
+
         if pred_series2 is not None:
-            pred_series2.index = pd.DatetimeIndex(pred_series2.index).tz_localize('UTC').tz_convert('Asia/Kolkata')
+            if pred_series2.index.tz is None:
+                pred_series2.index = pd.DatetimeIndex(pred_series2.index).tz_localize('UTC')
+            else:
+                 pred_series2.index = pd.DatetimeIndex(pred_series2.index)
+            pred_series2.index = pred_series2.index.tz_convert('Asia/Kolkata')
 
         fig = go.Figure()
 
