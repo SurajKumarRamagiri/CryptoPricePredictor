@@ -215,10 +215,20 @@ class View:
                 _, col = st.columns([4.5, 1])
                 with col:
                     Visualizer.download_csv(df, pred_series, user_input['pair'], user_input['horizon'])
+                # Custom Columns Display
+                df_display = df.copy().tail(8)
+                df_display.reset_index(inplace=True)
+                # Rename the first column (index) to Datetime
+                df_display.rename(columns={df_display.columns[0]: 'Datetime'}, inplace=True)
+                
+                target_cols = ['Datetime', 'Open', 'High', 'Low', 'Volume', 'Close']
+                # Select only available columns from target list
+                final_cols = [c for c in target_cols if c in df_display.columns]
+                
                 st.write("Last rows of input data:")
-                st.dataframe(df.tail(8))
+                st.dataframe(df_display[final_cols], width="stretch")
                 st.write("Predictions:")
-                st.dataframe(pred_series.to_frame("pred"))
+                st.dataframe(pred_series.to_frame("Predicted Close"), width=300)
 
             st.divider()
 

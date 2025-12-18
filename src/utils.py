@@ -10,8 +10,8 @@ class Config:
     """Central configuration for models, intervals, and settings."""
     
     # Base path for models
-    BASE_PATH = "complete_analysis_data (3)/dl_models"
-    SCALER_PATH = "complete_analysis_data (3)/dl_scalers"
+    BASE_PATH = "AnalysisData/dl_models"
+    SCALER_PATH = "AnalysisData/dl_scalers"
 
     MODEL_MAP = {
         ("BTC-USD","1h"): {

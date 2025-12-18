@@ -58,7 +58,7 @@
     *   `modeling.py`: Definitions for LSTM/GRU configurations and prediction logic.
     *   `visualization.py`: Functions for generating Plotly charts and UI metrics.
     *   `utils.py`: Configuration and helper utilities.
-*   `models/`: Directory where trained `.h5` model files and `.pkl` scalers are stored.
+*   `AnalysisData/`: Directory where trained Model files and Scalers are stored.
 *   `requirements.txt`: List of Python dependencies.
 
 ## How It Works
