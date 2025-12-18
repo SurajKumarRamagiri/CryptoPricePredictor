@@ -109,11 +109,29 @@ class InputHandler:
         with col:
             pair_label = st.selectbox(
                 "Select Cryptocurrency",
-                ("Bitcoin (BTC)", "Ethereum (ETH)", "Litecoin (LTC)"),
+                (
+                    "Bitcoin (BTC)", 
+                    "Ethereum (ETH)", 
+                    "Litecoin (LTC)", 
+                    "Solana (SOL)", 
+                    "Binance Coin (BNB)", 
+                    "Ripple (XRP)", 
+                    "Cardano (ADA)", 
+                    "Dogecoin (DOGE)"
+                ),
                 index=0
             )
 
-        pair_map = {"Bitcoin (BTC)": "BTC-USD", "Ethereum (ETH)": "ETH-USD", "Litecoin (LTC)": "LTC-USD"}
+        pair_map = {
+            "Bitcoin (BTC)": "BTC-USD", 
+            "Ethereum (ETH)": "ETH-USD", 
+            "Litecoin (LTC)": "LTC-USD",
+            "Solana (SOL)": "SOL-USD",
+            "Binance Coin (BNB)": "BNB-USD",
+            "Ripple (XRP)": "XRP-USD",
+            "Cardano (ADA)": "ADA-USD",
+            "Dogecoin (DOGE)": "DOGE-USD"
+        }
         pair = pair_map.get(pair_label, "BTC-USD")
 
         horizon_label = st.sidebar.radio(
@@ -134,19 +152,43 @@ class InputHandler:
             )
         st.sidebar.markdown("### 📅 Prediction Period")
         col_pred = st.sidebar.columns([220, 1])[0]
+        
+        # Dynamic Options based on Horizon
+        if horizon == "1h":
+            options = ("6 Hours", "12 Hours")
+        elif horizon == "4h":
+            options = ("1 Day", "3 Days")
+        else: # 24h
+            options = ("7 Days", "14 Days")
+            
         with col_pred:
             prediction_period_label = st.selectbox(
                 "Predict ahead for",
-                ("12 Hours", "1 Day", "7 Days"),
+                options,
                 index=0,
                 key="prediction_period_select"
             )
         
         val = int(prediction_period_label.split()[0])
-        if "Hour" in prediction_period_label:
-            prediction_period_hours = val
-        else:
+        if "Day" in prediction_period_label:
             prediction_period_hours = val * 24
+        else:
+            prediction_period_hours = val
+
+        st.sidebar.markdown("### 💼 Portfolio Simulator")
+        col_holdings = st.sidebar.columns([220, 1])[0]
+        with col_holdings:
+            with st.expander("Configure Holdings", expanded=False):
+                holdings = st.number_input(
+                    f"Amount of {pair.split('-')[0]} you hold:",
+                    min_value=0.0,
+                    value=0.0,
+                    step=0.1,
+                    format="%.4f"
+                )
+
+        st.sidebar.markdown("### 📈 Chart Options")
+        show_indicators = st.sidebar.checkbox("Show Technical Indicators", value=False)
 
         col1, col2 = st.sidebar.columns([1, 1])
 
@@ -197,7 +239,9 @@ class InputHandler:
             "prediction_period_hours": prediction_period_hours,
             "run": run,
             "compare": compare,
-            "source": data_source
+            "source": data_source,
+            "holdings": holdings,
+            "show_indicators": show_indicators
         }
 
     
@@ -206,8 +250,10 @@ class InputHandler:
         """Validate user configuration."""
         cfg = Config.MODEL_MAP.get((pair, horizon))
         if cfg is None:
-            st.error("No model configured for this pair/horizon. Update Config.MODEL_MAP in the app.")
-            return False
+            # Check fallback
+            if pair not in Config.FALLBACK_CHAIN:
+                # st.error("No model configured for this pair/horizon. Update Config.MODEL_MAP in the app.")
+                return False
         return True
 
 
@@ -231,14 +277,18 @@ def main():
         unsafe_allow_html=True
     )
 
-    if not InputHandler.validate_config(user_input['pair'], user_input['horizon']):
-        return
-
     # 3. Handle Main Logic Flow
     if user_input['run']:
+        if not InputHandler.validate_config(user_input['pair'], user_input['horizon']):
+             st.error(f"⚠️ No AI models available for {user_input['pair']} ({user_input['horizon']}). Prediction disabled.")
+             st.info("💡 You can currently only view historical data for this asset.")
+             return
         View.render_prediction_flow(user_input)
     
     elif user_input['compare']:
+        if not InputHandler.validate_config(user_input['pair'], user_input['horizon']):
+             st.error(f"⚠️ No AI models available for {user_input['pair']}. Comparison disabled.")
+             return
         View.render_comparison_flow(user_input)
         
     else:

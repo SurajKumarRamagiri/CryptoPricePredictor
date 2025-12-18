@@ -49,19 +49,24 @@ class PredictionEngine:
     """Orchestrates prediction pipeline."""
     
     @staticmethod
-    def run_prediction(df, model, scaler, lookback, n_features, steps=1):
+    def run_prediction(df, model, scale_bundle, lookback, n_features, steps=1):
         """Execute prediction pipeline."""
-        feature_columns = FeatureProcessor.FEATURE_COLUMNS
         
-        if not set(feature_columns).issubset(df.columns):
-            st.error(f"Missing expected columns. Found: {df.columns.tolist()}")
-            return None
+        scaler_x = scale_bundle["x"]
+        scaler_y = scale_bundle["y"]
         
-        df_features = df[feature_columns].dropna()
-        values = df_features.values
-        
+        # 1. Engineer Features
         try:
-            scaled = scaler.transform(values)
+            df_eng = FeatureProcessor.engineer_features(df)
+        except Exception as e:
+            st.error(f"Feature engineering failed: {e}")
+            return None
+            
+        features = df_eng[FeatureProcessor.FEATURE_COLUMNS].values
+        
+        # 2. Scale Features
+        try:
+            scaled = scaler_x.transform(features)
         except Exception as e:
             st.error(f"Scaler transform failed: {e}")
             return None
@@ -70,27 +75,26 @@ class PredictionEngine:
             st.error(f"Not enough data points ({len(scaled)}) for lookback={lookback}.")
             return None
         
-        last_seq = scaled[-lookback:]
-        cur_seq = last_seq.reshape(1, lookback, scaled.shape[1])
-        
+        # 3. Predict Multi-step
         t0 = time.time()
-        if steps > 1:
-            preds_scaled = Predictor.predict_iterative(model, cur_seq, steps, n_features)
-            # predict_iterative returns (steps, n_features), ensure 2D
-        else:
-            preds_scaled = Predictor.predict_single_step(model, cur_seq)
-            
-            if preds_scaled.ndim == 3:
-                preds_scaled = preds_scaled.reshape(preds_scaled.shape[1], preds_scaled.shape[2])
-            elif preds_scaled.ndim == 2:
-                preds_scaled = preds_scaled.reshape(preds_scaled.shape[1], 1)
-            else:
-                preds_scaled = np.array([[preds_scaled.ravel()[0]]])
-                
+        
+        preds_scaled = Predictor.predict_iterative_recalc(
+            model=model, 
+            df_history=df, # Pass original DF to allow feature re-calc
+            lookback=lookback, 
+            steps=steps, 
+            scaler_x=scaler_x,
+            scaler_y=scaler_y # Pass scaler_y for iterative history update
+        )
+        
         predict_time = time.time() - t0
         
-        preds = FeatureProcessor.denormalize_predictions(preds_scaled, scaler)
-        resid_std = Predictor.estimate_residual_std(model, scaler, values, lookback)
+        # 4. Denormalize
+        last_close = df['Close'].iloc[-1]
+        preds = FeatureProcessor.denormalize_predictions(preds_scaled, scaler_y, last_close)
+        
+        # 5. Residuals
+        resid_std = Predictor.estimate_residual_std(model, scaler_x, scaler_y, df, lookback)
         
         return {
             'preds_scaled': preds_scaled,
@@ -98,14 +102,14 @@ class PredictionEngine:
             'resid_std': resid_std,
             'predict_time': predict_time,
             'scaled': scaled,
-            'last_seq': last_seq
+            'last_seq': scaled[-lookback:]
         }
 
     @staticmethod
-    def compare_models(df, lstm_model, gru_model, scaler, lookback, n_features, steps=1, parallel=True):
+    def compare_models(df, lstm_model, gru_model, scale_bundle, lookback, n_features, steps=1, parallel=True):
         """Run predictions for LSTM and GRU and return structured results."""
         def call(model):
-            return PredictionEngine.run_prediction(df, model, scaler, lookback, n_features, steps=steps)
+            return PredictionEngine.run_prediction(df, model, scale_bundle, lookback, n_features, steps=steps)
 
         results = {}
         if parallel:
@@ -135,60 +139,139 @@ class PredictorHelper:
     """Helper methods for predictions."""
     
     @staticmethod
-    def predict_single_step(model, cur_seq):
-        """Generate a single prediction step."""
-        return model.predict(cur_seq, verbose=0)
-    
-    @staticmethod
-    def predict_iterative(model, cur_seq, steps, n_features):
-        """Generate multi-step predictions iteratively."""
-        preds_list = []
-        cur = cur_seq.copy()
+    def predict_iterative_recalc(model, df_history, lookback, steps, scaler_x):
+        """
+        Robust iterative prediction by:
+        1. Predicting next Log Return
+        2. Calculating next Price
+        3. Appending to history
+        4. Re-calculating ALL features (RSI/MACD etc) on extended history
+        5. Scaling and predicting next step
+        """
+        current_df = df_history.copy()
         
+        # For efficiency, we only need 'Open','High','Low','Close','Volume'
+        # But we need index for time features
+        # If 'Close' is generated, assume O=H=L=C for next candle (flat) or heuristic
+        
+        preds_scaled = []
+        
+        # Determine Interval Delta from index frequency
+        if len(current_df) > 1:
+            delta = current_df.index[-1] - current_df.index[-2]
+        else:
+            delta = pd.Timedelta(hours=1)
+            
         for i in range(steps):
-            out = PredictorHelper.predict_single_step(model, cur)
+            # A. Prepare Input Sequence
+            # 1. Feature Engineer full history
+            df_eng = FeatureProcessor.engineer_features(current_df)
             
-            if out.ndim == 3:
-                next_scaled = out[:, -1, :]
-            elif out.ndim == 2:
-                next_scaled = out[:, -1].reshape(1, 1)
-            else:
-                next_scaled = out.reshape(1, 1)
+            # 2. Scale
+            feats = df_eng[FeatureProcessor.FEATURE_COLUMNS].values
             
-            # Store prediction
-            preds_list.append(next_scaled.ravel())
+            # 3. Take last 'lookback'
+            if len(feats) < lookback:
+                break # Should not happen if check done before
             
-            # Prepare input for next step
-            if next_scaled.size < n_features:
-                # Model predicts target only (e.g., Close), but needs full features for input
-                # Impute other features from previous step
-                last_feats = cur[:, -1, :].reshape(1, n_features)
-                next_feats = last_feats.copy()
-                
-                # Update price columns if we have standard OHLCV structure
-                if n_features >= 4:
-                    # Index 3 is Close. Use it as new Close.
-                    val = next_scaled.ravel()[0]
-                    next_feats[0, 3] = val
-                    
-                    # Heuristics for other price columns
-                    next_feats[0, 0] = last_feats[0, 3]  # Open = Prev Close
-                    next_feats[0, 1] = val               # High = Close (flat candle)
-                    next_feats[0, 2] = val               # Low = Close (flat candle)
-                    # Volume (4) and Time features (5,6,7) copied from last step
-                else:
-                    # Fallback for non-standard feature sets
-                    next_feats.fill(next_scaled.ravel()[0])
-                
-                next_scaled_reshaped = next_feats.reshape(1, 1, n_features)
-            else:
-                next_scaled_reshaped = next_scaled.reshape(1, 1, n_features)
+            seq = feats[-lookback:].reshape(1, lookback, feats.shape[1])
             
-            cur = np.concatenate([cur[:, 1:, :], next_scaled_reshaped], axis=1)
+            # B. Predict Next Log Return (Scaled)
+            pred_scaled = model.predict(seq, verbose=0) 
+            # Output shape (1, 1) or (1, )
+            p_val = pred_scaled.flatten()[0]
+            preds_scaled.append(p_val)
+            
+            # C. Append Prediction to History for Next Iteration
+            # We need to Inverse Scale this single value to get Log Return, 
+            # BUT we don't have scaler_y here easily without circular dep or passing it.
+            # Wait, `run_prediction` has scaler_y. 
+            # Actually, `model` outputs scaled Log Return.
+            # We CANNOT update `current_df` prices without unscaling Log Return.
+            # We must pass scaler_y? No, `PredictorHelper` is static.
+            
+            # FIX: We passed only `scaler_x`. We really need `scaler_y` to update history.
+            # OR, we assume `steps`=1 is common case and `steps`>1 is rare.
+            # If we can't unscale, we can't update history.
+            # Let's assume we can't do this properly without major refactor to pass scaler_y.
+            
+            # HACK: If we are here, we need to return scaled predictions.
+            # But we can't iterate properly without y_scaler.
+            # Let's break loop if we can't update.
+            pass
+            
+        # Re-implement with scaler_y support if refined.
+        return np.array(preds_scaled)
+
+    @staticmethod
+    def predict_iterative_recalc_v2(model, df_history, lookback, steps, scaler_x):
+        """
+        Simplified Iterative: 
+        Since we don't have scaler_y easily injected here without breaking API,
+        AND re-calculating full pandas_ta features 24 times is slow,
+        We will do:
+        1. Predict 1 step.
+        2. Repeat output 'steps' times? No, that's a flat line.
+        3. Simple Repeat for now if steps > 1?
         
-        return np.array(preds_list).reshape(len(preds_list), -1)
+        BETTER: Modified signature in `run_prediction` to pass `scaler_y` if needed? 
+        Actually, `PredictionEngine` calls this. I can change signature.
+        """
+        return np.zeros((steps, 1)) # Placeholder until signature update
 
 
-# Add predict_single_step to Predictor for backward compatibility
-Predictor.predict_single_step = staticmethod(PredictorHelper.predict_single_step)
-Predictor.predict_iterative = staticmethod(PredictorHelper.predict_iterative)
+# Updated Predictor to use new logic
+# We will inject the logic directly into `PredictionEngine` above or update `PredictorHelper`.
+# Let's define the real function here and bind it.
+
+def predict_iterative_full(model, df_history, lookback, steps, scaler_x, scaler_y):
+    current_df = df_history.copy()
+    
+    # Infer delta
+    if len(current_df) > 1:
+        delta = current_df.index[-1] - current_df.index[-2]
+    else:
+        delta = pd.Timedelta(hours=1)
+        
+    preds_scaled = []
+    
+    for i in range(steps):
+        # 1. Features
+        df_eng = FeatureProcessor.engineer_features(current_df)
+        feats = df_eng[FeatureProcessor.FEATURE_COLUMNS].values
+        
+        # 2. Scale X
+        try:
+            seq_norm = scaler_x.transform(feats[-lookback:])
+        except:
+            # Fallback if transform fails (e.g. inf)
+            break
+            
+        seq = seq_norm.reshape(1, lookback, seq_norm.shape[1])
+        
+        # 3. Predict -> Scaled Log Return
+        pred_sc = model.predict(seq, verbose=0).flatten()[0]
+        preds_scaled.append(pred_sc)
+        
+        # 4. Update History (Inverse Y -> Log Ret -> Price)
+        log_ret = scaler_y.inverse_transform([[pred_sc]])[0,0]
+        last_close = current_df['Close'].iloc[-1]
+        new_close = last_close * np.exp(log_ret)
+        
+        new_ts = current_df.index[-1] + delta
+        
+        # New Row: Open=PrevClose, High=NewClose, Low=NewClose, Close=NewClose, Volume=0
+        new_row = pd.DataFrame([{
+            'Open': last_close,
+            'High': new_close,
+            'Low': new_close,
+            'Close': new_close,
+            'Volume': 0 # Assumption
+        }], index=[new_ts])
+        
+        current_df = pd.concat([current_df, new_row])
+        
+    return np.array(preds_scaled).reshape(-1, 1)
+
+# Bind
+Predictor.predict_iterative_recalc = staticmethod(predict_iterative_full)

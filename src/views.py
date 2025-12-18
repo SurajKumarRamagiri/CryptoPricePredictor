@@ -52,6 +52,7 @@ class View:
     @staticmethod
     def render_market_overview(user_input):
         """Renders the idle state market overview."""
+        from src.preprocessing import FeatureProcessor
         st.markdown("### 📊 Market Overview")
         with st.spinner(f"Fetching latest data for {user_input['pair']}..."):
             # Use 'Auto' model (None) just to get data
@@ -85,7 +86,17 @@ class View:
                     )
 
                 with col_chart:
-                    fig = Visualizer.plot_historical_data(df, user_input['pair'], user_input['horizon'])
+                    # Indicators Preparation
+                    df_eng = None
+                    if user_input.get('show_indicators'):
+                        df_eng = FeatureProcessor.engineer_features(df)
+                        
+                    fig = Visualizer.plot_historical_data(
+                        df, 
+                        user_input['pair'], 
+                        user_input['horizon'], 
+                        indicators_df=df_eng
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
     @staticmethod
@@ -136,6 +147,12 @@ class View:
             left_col, right_col = st.columns([3, 1], gap="large")
 
             with left_col:
+                # Indicators Preparation
+                df_eng = None
+                if user_input.get('show_indicators'):
+                    from src.preprocessing import FeatureProcessor
+                    df_eng = FeatureProcessor.engineer_features(df)
+
                 fig = Visualizer.plot_predictions(
                     df,
                     pred_series,
@@ -143,9 +160,44 @@ class View:
                     user_input['pair'],
                     user_input['horizon'],
                     lookback=lookback,
-                    label1=model_type
+                    label1=model_type,
+                    indicators_df=df_eng
                 )
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # --- PORTFOLIO SIMULATOR ---
+                holdings = user_input.get('holdings', 0.0)
+                if holdings > 0:
+                    current_portfolio_value = latest_price * holdings
+                    projected_portfolio_value = first_pred * holdings
+                    pnl = projected_portfolio_value - current_portfolio_value
+                    pnl_pct = (pnl / current_portfolio_value) * 100
+                    
+                    st.markdown("""
+                    <div style="background:#1e2329; padding:16px; border-radius:12px; margin-top:10px; margin-bottom:20px; border:1px solid #363c45;">
+                        <h4 style="margin:0 0 12px 0; color:#EAECEF;">💼 Portfolio Simulation Results</h4>
+                        <div style="display:flex; justify-content:space-between; gap:20px;">
+                            <div>
+                                <div style="font-size:12px; color:#848E9C;">Current Value</div>
+                                <div style="font-size:18px; font-weight:600; color:#EAECEF;">${:,.2f}</div>
+                            </div>
+                            <div>
+                                <div style="font-size:12px; color:#848E9C;">Projected Value</div>
+                                <div style="font-size:18px; font-weight:600; color:#F0B90B;">${:,.2f}</div>
+                            </div>
+                            <div>
+                                <div style="font-size:12px; color:#848E9C;">Est. PnL</div>
+                                <div style="font-size:18px; font-weight:600; color:{};">{:+.2f} ({:+.2f}%)</div>
+                            </div>
+                        </div>
+                    </div>
+                    """.format(
+                        current_portfolio_value, 
+                        projected_portfolio_value,
+                        "#0ECB81" if pnl >= 0 else "#F6465D",
+                        pnl, 
+                        pnl_pct
+                    ), unsafe_allow_html=True)
 
             with right_col:
                 st.markdown("<div style='margin-bottom:8px; font-weight:700;'>Quick KPIs</div>", unsafe_allow_html=True)
@@ -153,8 +205,10 @@ class View:
                 st.metric(label=f"Next-step Δ ({model_type})", value=f"{pct_change:+.2f}%", delta=f"${(first_pred - latest_price):.2f}")
                 st.markdown(f"<div style='margin-top:8px; color:#8F99A6; font-size:13px;'>Latency: <strong>{result['predict_time']*1000:.0f} ms</strong></div>", unsafe_allow_html=True)
                 st.markdown(f"<div style='color:#8F99A6; font-size:13px;'>CI (95%): <strong>${ci_low:.2f}</strong> — <strong>${ci_high:.2f}</strong></div>", unsafe_allow_html=True)
+                
                 st.markdown("---")
-                st.markdown("<div style='font-size:13px; color:#98A0AA;'>Model</div>", unsafe_allow_html=True)
+
+                st.markdown("<div style='font-size:13px; color:#98A0AA; margin-bottom:4px;'>Model</div>", unsafe_allow_html=True)
                 st.markdown(f"<div style='padding:8px 10px; border-radius:8px; background:#0f1720; color:#00FFFF; font-weight:700; display:inline-block;'>{model_type}</div>", unsafe_allow_html=True)
 
             with st.expander("Show raw input & predictions", expanded=False):
@@ -183,8 +237,22 @@ class View:
     @staticmethod
     def render_comparison_flow(user_input):
         """Executes and renders the model comparison flow."""
+    @staticmethod
+    def render_comparison_flow(user_input):
+        """Executes and renders the model comparison flow."""
         key = (user_input['pair'], user_input['horizon'])
         pool = Config.MODEL_MAP.get(key)
+        used_surrogate = None
+        
+        # Fallback Logic
+        if pool is None:
+            surrogate_pair = Config.FALLBACK_CHAIN.get(user_input['pair'])
+            if surrogate_pair:
+                surrogate_key = (surrogate_pair, user_input['horizon'])
+                pool = Config.MODEL_MAP.get(surrogate_key)
+                if pool:
+                    used_surrogate = surrogate_pair
+
         if pool is None:
             st.error("No model configs for this pair/horizon.")
             return
@@ -196,25 +264,30 @@ class View:
             st.error("LSTM or GRU config missing for this pair/horizon.")
             return
 
-        scaler_path = lstm_cfg.get('scaler') or gru_cfg.get('scaler')
-        scaler = ModelLoader.load_scaler(scaler_path)
+        scaler_x_path = lstm_cfg.get('scaler_x') or gru_cfg.get('scaler_x')
+        scaler_y_path = lstm_cfg.get('scaler_y') or gru_cfg.get('scaler_y')
+        
+        scaler_x = ModelLoader.load_scaler(scaler_x_path)
+        scaler_y = ModelLoader.load_scaler(scaler_y_path)
+        scale_bundle = {"x": scaler_x, "y": scaler_y}
+
         lstm_model = ModelLoader.load_keras_model(lstm_cfg.get('model'))
         gru_model = ModelLoader.load_keras_model(gru_cfg.get('model'))
 
-        if lstm_model is None or gru_model is None or scaler is None:
+        if lstm_model is None or gru_model is None or scaler_x is None or scaler_y is None:
             st.error("Failed to load models/scaler for comparison.")
             return
 
         example_model = lstm_model
         df, lookback, n_features, yf_interval = DataLoader.fetch_and_prepare_data(
-            user_input['pair'], user_input['horizon'], example_model, scaler, source=user_input['source']
+            user_input['pair'], user_input['horizon'], example_model, scale_bundle, source=user_input['source']
         )
         if df is None:
             return
 
         with st.spinner("Running LSTM and GRU predictions..."):
             steps = TimelineBuilder.compute_prediction_steps(user_input['horizon'], user_input['prediction_period_hours'])
-            results = PredictionEngine.compare_models(df, lstm_model, gru_model, scaler, lookback, n_features, steps=steps, parallel=True)
+            results = PredictionEngine.compare_models(df, lstm_model, gru_model, scale_bundle, lookback, n_features, steps=steps, parallel=True)
 
             if not results.get('lstm') or not results.get('gru'):
                 st.error("Comparison failed; one or both models returned no result.")
@@ -234,6 +307,12 @@ class View:
 
             left_col, right_col = st.columns([2.5, 1], gap="large")
             with left_col:
+                # Indicators Preparation
+                df_eng = None
+                if user_input.get('show_indicators'):
+                    from src.preprocessing import FeatureProcessor
+                    df_eng = FeatureProcessor.engineer_features(df)
+
                 fig = Visualizer.plot_predictions(
                     df,
                     lstm_series,
@@ -244,10 +323,14 @@ class View:
                     pred_series2=gru_series,
                     resid_std2=gru_res['resid_std'],
                     label1='LSTM',
-                    label2='GRU'
+                    label2='GRU',
+                    indicators_df=df_eng
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 st.subheader("Models Used")
+                
+                # Surrogate warning removed
+
                 st.write(
                     "<span style='padding:6px 12px; background:#0f1720; color:#00FFFF; "
                     "border-radius:6px; font-weight:700; margin-right:8px;'>LSTM</span>"
@@ -255,6 +338,46 @@ class View:
                     "border-radius:6px; font-weight:700;'>GRU</span>",
                     unsafe_allow_html=True
                 )
+
+                st.subheader("Comparison Summary")
+                st.markdown("#### Model KPIs")
+
+                col_l, col_g = st.columns(2, gap="large")
+
+                with col_l:
+                    st.markdown("#### LSTM")
+                    st.write(f"Latency: `{int(lstm_res['predict_time']*1000)} ms`")
+                    st.write(f"Steps: `{lstm_series.shape[0]}`")
+                    st.write(f"First Prediction: `${lstm_series.iloc[0]:.2f}`")
+
+                with col_g:
+                    st.markdown("#### GRU")
+                    st.write(f"Latency: `{int(gru_res['predict_time']*1000)} ms`")
+                    st.write(f"Steps: `{gru_series.shape[0]}`")
+                    st.write(f"First Prediction: `${gru_series.iloc[0]:.2f}`")
+
+                common_idx = lstm_series.index.intersection(gru_series.index)
+
+                st.markdown("#### Model Difference")
+
+                if len(common_idx) > 0:
+                    mean_abs_diff = (lstm_series.loc[common_idx] - gru_series.loc[common_idx]).abs().mean()
+                    st.write(f"Mean Absolute Difference across Predictions over `{len(common_idx)}` overlapping steps: `${mean_abs_diff:.2f}` USD")
+                else:
+                    st.info("No overlapping timestamps to compare model predictions.")
+
+                def ci_width(res):
+                    return (2 * 1.96 * abs(res['resid_std'])) if (res and res.get('resid_std') is not None) else np.nan
+
+                st.markdown("#### Forecast Uncertainty")
+
+                col_l2, col_g2 = st.columns(2, gap="large")
+
+                with col_l2:
+                    st.write(f"LSTM: 95% CI Width: `{ci_width(lstm_res):.2f}` USD")
+
+                with col_g2:
+                    st.write(f"GRU: 95% CI Width: `{ci_width(gru_res):.2f}` USD")
 
             with right_col:
                 st.markdown("<div style='font-weight:700; margin-bottom:6px;'>Comparison</div>", unsafe_allow_html=True)
@@ -270,51 +393,13 @@ class View:
                     st.write("No overlapping prediction timestamps to compare directly.")
 
                 st.markdown("---")
-                with st.expander("Show model-wise predictions", expanded=False):
+                with st.expander("Show model-wise predictions", expanded=True):
                     st.write("LSTM predictions")
                     st.dataframe(lstm_series.to_frame("lstm_pred"))
                     st.write("GRU predictions")
                     st.dataframe(gru_series.to_frame("gru_pred"))
 
-            st.subheader("Comparison Summary")
-            st.markdown("#### Model KPIs")
 
-            col_l, col_g = st.columns(2, gap="large")
-
-            with col_l:
-                st.markdown("#### LSTM")
-                st.write(f"Latency: `{int(lstm_res['predict_time']*1000)} ms`")
-                st.write(f"Steps: `{lstm_series.shape[0]}`")
-                st.write(f"First Prediction: `${lstm_series.iloc[0]:.2f}`")
-
-            with col_g:
-                st.markdown("#### GRU")
-                st.write(f"Latency: `{int(gru_res['predict_time']*1000)} ms`")
-                st.write(f"Steps: `{gru_series.shape[0]}`")
-                st.write(f"First Prediction: `${gru_series.iloc[0]:.2f}`")
-
-            common_idx = lstm_series.index.intersection(gru_series.index)
-
-            st.markdown("#### Model Difference")
-
-            if len(common_idx) > 0:
-                mean_abs_diff = (lstm_series.loc[common_idx] - gru_series.loc[common_idx]).abs().mean()
-                st.write(f"Mean Absolute Difference across Predictions over `{len(common_idx)}` overlapping steps: `${mean_abs_diff:.2f}` USD")
-            else:
-                st.info("No overlapping timestamps to compare model predictions.")
-
-            def ci_width(res):
-                return (2 * 1.96 * abs(res['resid_std'])) if (res and res.get('resid_std') is not None) else np.nan
-
-            st.markdown("#### Forecast Uncertainty")
-
-            col_l2, col_g2 = st.columns(2, gap="large")
-
-            with col_l2:
-                st.write(f"LSTM: 95% CI Width: `{ci_width(lstm_res):.2f}` USD")
-
-            with col_g2:
-                st.write(f"GRU: 95% CI Width: `{ci_width(gru_res):.2f}` USD")
             
             st.success("Comparison Complete.")
 
