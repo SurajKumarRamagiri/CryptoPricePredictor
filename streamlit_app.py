@@ -53,7 +53,7 @@ class InputHandler:
             """,
             unsafe_allow_html=True
         )
-        st.sidebar.caption("Real-Time Market Intelligence — AI-powered forecasts")
+        st.sidebar.caption("Real-Time Market Intelligence AI-powered forecasts")
 
         theme_mode = "Dark"
 
@@ -71,11 +71,21 @@ class InputHandler:
         css_sidebar = f"""
         <style>
         [data-testid="stSidebar"] {{
-        background-color: {secondary_bg};
-        padding: 16px 12px 24px 12px;
-        border-right: 1px solid rgba(0,0,0,0.04);
-        min-width: 400px;
-        max-width: 400px;
+            background-color: {secondary_bg};
+            padding: 16px 12px 24px 12px;
+            border-right: 1px solid rgba(0,0,0,0.04);
+        }}
+        @media (min-width: 768px) {{
+            [data-testid="stSidebar"][aria-expanded="true"] {{
+                min-width: 400px;
+                max-width: 400px;
+            }}
+        }}
+        @media (max-width: 768px) {{
+            [data-testid="stSidebar"][aria-expanded="true"] {{
+                min-width: 100%;
+                max-width: 100%;
+            }}
         }}
         .sidebar-title {{ font-size:20px; font-weight:700; color:{accent}; margin-bottom:6px; }}
         .sidebar-caption {{ font-size:12px; color:rgba(0,0,0,0.45); margin-top:-8px; margin-bottom:12px; }}
@@ -112,12 +122,7 @@ class InputHandler:
                 (
                     "Bitcoin (BTC)", 
                     "Ethereum (ETH)", 
-                    "Litecoin (LTC)", 
-                    "Solana (SOL)", 
-                    "Binance Coin (BNB)", 
-                    "Ripple (XRP)", 
-                    "Cardano (ADA)", 
-                    "Dogecoin (DOGE)"
+                    "Litecoin (LTC)"
                 ),
                 index=0
             )
@@ -125,12 +130,7 @@ class InputHandler:
         pair_map = {
             "Bitcoin (BTC)": "BTC-USD", 
             "Ethereum (ETH)": "ETH-USD", 
-            "Litecoin (LTC)": "LTC-USD",
-            "Solana (SOL)": "SOL-USD",
-            "Binance Coin (BNB)": "BNB-USD",
-            "Ripple (XRP)": "XRP-USD",
-            "Cardano (ADA)": "ADA-USD",
-            "Dogecoin (DOGE)": "DOGE-USD"
+            "Litecoin (LTC)": "LTC-USD"
         }
         pair = pair_map.get(pair_label, "BTC-USD")
 
@@ -155,11 +155,11 @@ class InputHandler:
         
         # Dynamic Options based on Horizon
         if horizon == "1h":
-            options = ("6 Hours", "12 Hours")
+            options = ("4 Hours", "8 Hours")
         elif horizon == "4h":
-            options = ("1 Day", "3 Days")
+            options = ("12 Hours", "24 Hours")
         else: # 24h
-            options = ("7 Days", "14 Days")
+            options = ("3 Days", "7 Days")
             
         with col_pred:
             prediction_period_label = st.selectbox(
@@ -222,7 +222,7 @@ class InputHandler:
         """, unsafe_allow_html=True)
 
         st.sidebar.markdown("---")
-        st.sidebar.markdown("**🔗 Powered by:** Binance API")
+        st.sidebar.markdown("**🔗 Powered by:** Binance API & Yahoo Finance")
         st.sidebar.markdown("**⏱ Timezone:** IST ")
         st.sidebar.caption("Built with Streamlit • Model: LSTM / GRU")
 
@@ -271,7 +271,7 @@ def main():
     user_input = InputHandler.render_sidebar()
 
     st.markdown(
-        f"<div style='color:#9AA2AA; margin-bottom:8px;'>"
+        f"<div style='color:#9AA2AA; margin-bottom:0px;'>"
         f"<strong>Pair:</strong> {user_input['pair']} &nbsp; • &nbsp; <strong>Horizon:</strong> {user_input['horizon']}"
         f"</div>",
         unsafe_allow_html=True
@@ -279,6 +279,7 @@ def main():
 
     # 3. Handle Main Logic Flow
     if user_input['run']:
+        View.close_sidebar()
         if not InputHandler.validate_config(user_input['pair'], user_input['horizon']):
              st.error(f"⚠️ No AI models available for {user_input['pair']} ({user_input['horizon']}). Prediction disabled.")
              st.info("💡 You can currently only view historical data for this asset.")
@@ -286,6 +287,7 @@ def main():
         View.render_prediction_flow(user_input)
     
     elif user_input['compare']:
+        View.close_sidebar()
         if not InputHandler.validate_config(user_input['pair'], user_input['horizon']):
              st.error(f"⚠️ No AI models available for {user_input['pair']}. Comparison disabled.")
              return

@@ -12,7 +12,56 @@ class Visualizer:
     """Handles chart generation and display."""
     
     @staticmethod
-    def plot_historical_data(df, pair, horizon, lookback=48, indicators_df=None):
+    def _get_common_layout(title, height, show_legend=True, legend_kwargs=None, initial_range=None):
+        """
+        Returns a standardized Plotly layout dictionary optimized for responsiveness.
+        """
+        base_layout = dict(
+            autosize=True,
+            height=height,
+            hovermode='x unified',
+            dragmode='pan',
+            showlegend=show_legend,
+            margin=dict(l=0, r=0, t=130, b=0), # Tight margins for maximum width
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True,
+                zeroline=False,
+            ),
+            yaxis=dict(
+                gridcolor='rgba(255,255,255,0.1)',
+                showgrid=True,
+                zeroline=False
+            )
+        )
+
+        if title:
+            base_layout['title'] = dict(text=title, y=1, x=0.01, xanchor='left', yanchor='top')
+        
+        if initial_range:
+            base_layout['xaxis']['range'] = initial_range
+        
+        if legend_kwargs:
+            base_layout['legend'] = legend_kwargs
+        elif show_legend:
+            # Default responsive legend: Horizontal on top
+            base_layout['legend'] = dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='right',
+                x=1,
+                bgcolor='rgba(0,0,0,0.3)',
+                bordercolor='rgba(255,255,255,0.1)',
+                borderwidth=1
+            )
+            
+        return base_layout
+
+    @staticmethod
+    def plot_historical_data(df, pair, horizon, lookback=100, indicators_df=None):
         """Generate interactive Plotly chart with recent historical data only."""
         from plotly.subplots import make_subplots
         
@@ -29,14 +78,14 @@ class Visualizer:
                 rows=3, cols=1, 
                 shared_xaxes=True,
                 vertical_spacing=0.03,
-                row_heights=[0.6, 0.2, 0.2],
+                row_heights=[0.5, 0.3, 0.2],
                 subplot_titles=(f"{pair} ({horizon})", "RSI", "MACD")
             )
-             height = 700
+             height = 480
         else:
              # Single Plot Mode
              fig = go.Figure()
-             height = 500
+             height = 480
         
         # --- Main Price Chart (Row 1) ---
         target_row = 1 if indicators_df is not None else None
@@ -67,7 +116,6 @@ class Visualizer:
             ind_recent.index = ind_recent.index.tz_convert('Asia/Kolkata')
 
             # 1. Bollinger Bands (Overlay on Price)
-            # 1. Bollinger Bands (Overlay on Price)
             bbu = ind_recent.get('BBU_20_2.0_2.0')
             if bbu is None:
                 bbu = ind_recent.get('BBU_20_2.0')
@@ -83,7 +131,7 @@ class Visualizer:
             if rsi is not None:
                 fig.add_trace(go.Scatter(x=ind_recent.index, y=rsi, name='RSI', line=dict(color='#9467bd')), row=2, col=1)
                 fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,0,0,0.5)", row=2, col=1, 
-                              annotation_text="Overbought (70)", annotation_position="top right", annotation_font_color="rgba(255,0,0,0.8)")
+                              annotation_text="Overbought", annotation_position="top right", annotation_font_color="rgba(255,0,0,0.8)")
                 fig.add_hline(y=30, line_dash="dash", line_color="rgba(0,255,0,0.5)", row=2, col=1,
                               annotation_text="Oversold (30)", annotation_position="bottom right", annotation_font_color="rgba(0,255,0,0.8)")
 
@@ -96,24 +144,24 @@ class Visualizer:
                  fig.add_trace(go.Scatter(x=ind_recent.index, y=signal, name='Signal', line=dict(color='#e377c2')), row=3, col=1)
                  colors = np.where(hist >= 0, '#00CC96', '#EF553B')
                  fig.add_trace(go.Bar(x=ind_recent.index, y=hist, name='Hist', marker_color=colors), row=3, col=1)
-
-        layout_args = dict(
-            xaxis_title='Time' if indicators_df is None else None,
-            yaxis_title='Price (USD)',
-            hovermode='x unified',
-            height=height,
-            showlegend=False if indicators_df is not None else True, # Hide legend in complex plot to avoid clutter
-            margin=dict(l=20, r=20, t=40, b=20),
-            legend=dict(orientation='h', y=1.02, x=1) if indicators_df is None else None
-        )
-        if indicators_df is None:
-            layout_args['title'] = f"{pair} — Recent Market Data ({horizon})"
-
-        fig.update_layout(**layout_args)
         
-        # Grid styling
-        fig.update_yaxes(gridcolor='rgba(255,255,255,0.1)')
-        fig.update_xaxes(gridcolor='rgba(255,255,255,0.1)')
+        # Determine Initial Zoom Range (Last ~24 points)
+        # We use recent_df which is typically 'lookback' length (e.g. 48)
+        # We want approx half of that or 24 points.
+        # Determine Initial Zoom Range (Last ~30 points)
+        # We load 'lookback' points (e.g. 100), but only zoom on last 30
+        zoom_points = min(30, len(recent_df))
+        zoom_start = recent_df.index[-zoom_points]
+        zoom_end = recent_df.index[-1]
+
+        # Apply Common Layout
+        layout = Visualizer._get_common_layout(
+            title=f"{pair} — Recent Market Data ({horizon})" if indicators_df is None else None,
+            height=height,
+            show_legend=(indicators_df is None),
+            initial_range=[zoom_start, zoom_end]
+        )
+        fig.update_layout(**layout)
         
         return fig
 
@@ -135,8 +183,6 @@ class Visualizer:
         )
         
         # 1. Price + BBands
-        # BBands cols: BBL_20_2.0, BBM_20_2.0, BBU_20_2.0
-        # Check if cols exist (pandas_ta naming)
         bbu = df.get('BBU_20_2.0')
         bbl = df.get('BBL_20_2.0')
         bbm = df.get('BBM_20_2.0')
@@ -153,12 +199,10 @@ class Visualizer:
         rsi = df.get('RSI')
         if rsi is not None:
             fig.add_trace(go.Scatter(x=df.index, y=rsi, name='RSI', line=dict(color='#9467bd')), row=2, col=1)
-            # Add 70/30 lines
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1, annotation_text="Overbought")
             fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1, annotation_text="Oversold")
             
         # 3. MACD
-        # MACD cols: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
         macd = df.get('MACD_12_26_9')
         signal = df.get('MACDs_12_26_9')
         hist = df.get('MACDh_12_26_9')
@@ -166,25 +210,27 @@ class Visualizer:
         if macd is not None:
              fig.add_trace(go.Scatter(x=df.index, y=macd, name='MACD', line=dict(color='#17becf')), row=3, col=1)
              fig.add_trace(go.Scatter(x=df.index, y=signal, name='Signal', line=dict(color='#e377c2')), row=3, col=1)
-             # Histogram
              colors = np.where(hist >= 0, '#00CC96', '#EF553B')
              fig.add_trace(go.Bar(x=df.index, y=hist, name='Hist', marker_color=colors), row=3, col=1)
+        
+        # Initial Zoom (Last ~30 points)
+        zoom_points = min(30, len(df))
+        zoom_start = df.index[-zoom_points]
+        zoom_end = df.index[-1]
 
-        fig.update_layout(
-            height=800, 
-            hovermode='x unified',
-            showlegend=False,
-            margin=dict(l=20, r=20, t=40, b=20),
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)'
+        # Apply Common Layout
+        layout = Visualizer._get_common_layout(
+            title=None, 
+            height=500,
+            show_legend=False,
+            initial_range=[zoom_start, zoom_end]
         )
-        fig.update_yaxes(gridcolor='rgba(255,255,255,0.1)')
-        fig.update_xaxes(gridcolor='rgba(255,255,255,0.1)')
+        fig.update_layout(**layout)
         
         return fig
 
     @staticmethod
-    def plot_predictions(df, pred_series, resid_std, pair, horizon, lookback=60,
+    def plot_predictions(df, pred_series, resid_std, pair, horizon, lookback=100,
                         pred_series2=None, resid_std2=None, label1='LSTM', label2='GRU', indicators_df=None):
         """Generate interactive Plotly chart with recent historical data."""
         from plotly.subplots import make_subplots
@@ -214,13 +260,13 @@ class Visualizer:
                 rows=3, cols=1, 
                 shared_xaxes=True,
                 vertical_spacing=0.03,
-                row_heights=[0.6, 0.2, 0.2],
+                row_heights=[0.5, 0.3, 0.2],
                 subplot_titles=(f"{pair} Prediction ({horizon})", "RSI", "MACD")
             )
-             height = 750 # Taller for predictions
+             height = 480 
         else:
              fig = go.Figure()
-             height = 500
+             height = 480
 
         recent_df = df.tail(lookback)
         
@@ -337,7 +383,6 @@ class Visualizer:
             ind_recent.index = ind_recent.index.tz_convert('Asia/Kolkata')
 
             # 1. Bollinger Bands (Overlay on Price)
-            # 1. Bollinger Bands (Overlay on Price)
             bbu = ind_recent.get('BBU_20_2.0_2.0')
             if bbu is None:
                 bbu = ind_recent.get('BBU_20_2.0')
@@ -367,36 +412,36 @@ class Visualizer:
                  colors = np.where(hist >= 0, '#00CC96', '#EF553B')
                  fig.add_trace(go.Bar(x=ind_recent.index, y=hist, name='Hist', marker_color=colors), row=3, col=1)
 
-        layout_args = dict(
-            xaxis_title='Time' if indicators_df is None else None,
-            yaxis_title='Price (USD)',
-            hovermode='x unified',
+        
+        # Calculate Initial Zoom Range
+        # Goal: Show connected prediction chain + similar amount of history
+        # connected_x includes last known point + predictions.
+        # Let's show ~20-25 points of history before the prediction starts.
+        # recent_df = df.tail(lookback) which is typically 60 points.
+        # connected_x start is recent_df.index[-1]
+        
+        # Get start of zoom:
+        hist_steps_to_show = 30
+        zoom_start_idx = max(0, len(recent_df) - hist_steps_to_show)
+        zoom_start = recent_df.index[zoom_start_idx]
+        
+        # End of zoom is end of prediction + buffer?
+        # connected_x ends at the last prediction point.
+        zoom_end = connected_x[-1]
+
+        # Apply Common Layout
+        layout = Visualizer._get_common_layout(
+            title=f"Recent History + Prediction ({horizon})" if indicators_df is None else None,
             height=height,
-            showlegend=False if indicators_df is not None else True,
-            xaxis=dict(
-                tickformat='%I:%M %p<br>%d %b',
-                ticklabelmode='period'
-            ),
-            legend=dict(
-                orientation='h' if indicators_df is not None else 'v',
-                x=1,
-                y=1.02 if indicators_df is not None else 1,
-                xanchor='right',
-                yanchor='bottom' if indicators_df is not None else 'top',
-                bgcolor='rgba(0,0,0,0.35)',
-                bordercolor='rgba(255,255,255,0.05)',
-                borderwidth=1
-            )
+            show_legend=(indicators_df is None),
+            initial_range=[zoom_start, zoom_end]
         )
+        # Prediction chart specific axis formatting
+        layout['xaxis']['tickformat'] = '%I:%M %p<br>%d %b'
+        layout['xaxis']['ticklabelmode'] = 'period'
 
-        if indicators_df is None:
-            layout_args['title'] = f"{pair} — Recent History + Prediction ({horizon})"
-
-        fig.update_layout(**layout_args)
-
+        fig.update_layout(**layout)
         fig.update_xaxes(rangeslider=dict(visible=False))
-        fig.update_yaxes(gridcolor='rgba(255,255,255,0.1)')
-        fig.update_xaxes(gridcolor='rgba(255,255,255,0.1)')
 
         return fig
 
@@ -420,7 +465,7 @@ class Visualizer:
         st.markdown(
             f"- Last known close: **${df['close'].iloc[-1]:.4f}**\n"
             f"- Predicted ({pred_series.index[-1].strftime('%Y-%m-%d %H:%M')}): "
-            f"**${pred_series.iloc[-1]:.4f}** ({pct_change:.2f}% — **{direction}**)\n"
+            f"**${pred_series.iloc[-1]:.4f}** ({pct_change:.2f}% - **{direction}**)\n"
             f"- Prediction latency: **{predict_time*1000:.0f} ms**"
         )
         if resid_std > 0:

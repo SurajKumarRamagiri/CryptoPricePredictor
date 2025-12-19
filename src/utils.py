@@ -65,23 +65,13 @@ class Config:
     HORIZON_STEPS = {"1h":1, "4h":6, "24h":30}
     LOOKBACK_SAFETY_FACTOR = 1.5
     MIN_HISTORY_POINTS = 200
-    MIN_HISTORY_POINTS = 200
     RESIDUAL_N_SAMPLES = 100
     
     # Mapping: Target Asset -> Surrogate Asset (for model sharing)
     FALLBACK_CHAIN = {
         # ETH-Correlated (Smart Contract Platforms / High Beta)
-        "SOL-USD": "ETH-USD",
-        "BNB-USD": "ETH-USD",
-        "ADA-USD": "ETH-USD",
-        
-        # LTC-Correlated (Legacy / Payment / Old Gen)
-        "XRP-USD": "LTC-USD",
-        "DOGE-USD": "LTC-USD",
-        
-        # Catch-all or Cross-cycle?
-        # If LTC-USD model missing, maybe map LTC -> BTC? 
-        # For now, we assume BTC/ETH/LTC models exist.
+        # "SOL-USD": "ETH-USD",
+        # "ADA-USD": "ETH-USD",
     }
 
 

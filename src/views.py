@@ -13,6 +13,33 @@ class View:
     """Handles rendering of different application views."""
 
     @staticmethod
+    def close_sidebar():
+        """Injects JS to close sidebar (globally)."""
+        import streamlit.components.v1 as components
+        js_code = """
+        <script>
+            try {
+                const doc = window.parent.document;
+                const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+                if (sidebar) {
+                    const style = window.getComputedStyle(sidebar);
+                    // Check physical width to determine if open
+                    const width = parseInt(style.width);
+                    if (width > 100) {
+                        const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"]');
+                        if (btn) {
+                            btn.click();
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log("Sidebar toggle error", e);
+            }
+        </script>
+        """
+        components.html(js_code, height=0, width=0)
+
+    @staticmethod
     def render_header():
         """Renders the application header with logo and status."""
         def img_to_base64(path: str) -> str:
@@ -36,7 +63,7 @@ class View:
                 <div style="flex:1 1 auto">
                     <h1 style="margin:0; font-size:28px;">CryptoSense AI - CryptoCurrency Price Predictor</h1>
                     <div style="color: #98A0AA; font-size:14px;">
-                        Choose a pair and horizon to generate fast, interactive crypto forecasts.
+                        Generate fast, interactive crypto forecasts.
                     </div>
                 </div>
                 <div style="flex:0 0 auto; text-align:right;">
@@ -45,6 +72,52 @@ class View:
                 </div>
             </div>
             <hr style="border:none; height:1px; background:linear-gradient(90deg, rgba(255,255,255,0), rgba(200,200,200,0.12), rgba(255,255,255,0)); margin-bottom:18px;" />
+            <style>
+                .block-container {{
+                    padding-top: 5rem;
+                    padding-bottom: 0.5rem;
+                    padding-left: 3rem;
+                    padding-right: 3rem;
+                    max-width: 100%;
+                }}
+                @media (max-width: 768px) {{
+                    .block-container {{
+                        padding-left: 0.5rem;
+                        padding-right: 0.5rem;
+                        padding-bottom: 0rem;
+                    }}
+                }}
+                /* Move Plotly Modebar down */
+                .js-plotly-plot .plotly .modebar {{
+                    top: 20px !important;
+                }}
+                /* Force Chart to full height in fullscreen */
+                [data-testid="stFullScreenFrame"] .js-plotly-plot {{
+                    height: 85vh !important;
+                }}
+                [data-testid="stFullScreenFrame"] .plotly {{
+                    height: 85vh !important;
+                }}
+                /* Decrease vertical gap between components on mobile */
+                @media (max-width: 768px) {{
+                    div[data-testid="stVerticalBlock"] > div {{
+                        padding-bottom: 0rem;
+                        gap: 0rem;
+                    }}
+                    .stPlotlyChart {{
+                        margin-bottom: -150px;
+                    }}
+                }}
+                /* Desktop Chart Height Override */
+                @media (min-width: 768px) {{
+                    .js-plotly-plot, .plotly {{
+                        height: 700px !important;
+                    }}
+                    .stPlotlyChart {{
+                        margin-bottom: -150px;
+                    }}
+                }}
+            </style>
             """,
             unsafe_allow_html=True
         )
@@ -202,7 +275,23 @@ class View:
             with right_col:
                 st.markdown("<div style='margin-bottom:8px; font-weight:700;'>Quick KPIs</div>", unsafe_allow_html=True)
                 st.metric(label="Current Price", value=f"${latest_price:,.2f}")
-                st.metric(label=f"Next-step Δ ({model_type})", value=f"{pct_change:+.2f}%", delta=f"${(first_pred - latest_price):.2f}")
+                diff = first_pred - latest_price
+                color = "#0ECB81" if diff >= 0 else "#F6465D"
+                arrow = "↑" if diff >= 0 else "↓"
+                
+                st.markdown(f"""
+                <div style="display: flex; flex-direction: column; margin-bottom: 16px;">
+                    <span style="font-size: 14px; color: #9aa0a6; margin-bottom: 4px;">
+                        Next-step Δ ({model_type})
+                    </span>
+                    <span style="font-size: 30px; font-weight: 700; color: {color};">
+                        {pct_change:+.2f}%
+                    </span>
+                    <span style="font-size: 14px; color: {color}; font-weight: 500; margin-top: 4px;">
+                        {arrow} ${abs(diff):.2f}
+                    </span>
+                </div>
+                """, unsafe_allow_html=True)
                 st.markdown(f"<div style='margin-top:8px; color:#8F99A6; font-size:13px;'>Latency: <strong>{result['predict_time']*1000:.0f} ms</strong></div>", unsafe_allow_html=True)
                 st.markdown(f"<div style='color:#8F99A6; font-size:13px;'>CI (95%): <strong>${ci_low:.2f}</strong> — <strong>${ci_high:.2f}</strong></div>", unsafe_allow_html=True)
                 
@@ -226,7 +315,7 @@ class View:
                 final_cols = [c for c in target_cols if c in df_display.columns]
                 
                 st.write("Last rows of input data:")
-                st.dataframe(df_display[final_cols], width="stretch")
+                st.dataframe(df_display[final_cols], use_container_width=True)
                 st.write("Predictions:")
                 st.dataframe(pred_series.to_frame("Predicted Close"), width=300)
 
@@ -405,9 +494,9 @@ class View:
                 st.markdown("---")
                 with st.expander("Show model-wise predictions", expanded=True):
                     st.write("LSTM predictions")
-                    st.dataframe(lstm_series.to_frame("lstm_pred"))
+                    st.dataframe(lstm_series.to_frame("lstm_pred"), use_container_width=True)
                     st.write("GRU predictions")
-                    st.dataframe(gru_series.to_frame("gru_pred"))
+                    st.dataframe(gru_series.to_frame("gru_pred"), use_container_width=True)
 
 
             
@@ -423,17 +512,23 @@ class View:
             bottom: 0;
             left: 0;
             width: 100%;
-            padding: 12px 0;
+            padding: 4px 0;
             background: #0e1117;
             text-align: center;
             font-size: 13px;
             color: #9aa0a6;
             border-top: 1px solid rgba(255,255,255,0.08);
-            margin-top: 40px;
+            margin-top: 0px;
         }
         .simple-footer span {
             color: #00e6a8;
             font-weight: 500;
+        }
+        @media (max-width: 768px) {
+            .simple-footer {
+                padding: 2px 0;
+                font-size: 10px;
+            }
         }
         </style>
         
